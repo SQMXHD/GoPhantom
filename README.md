@@ -23,7 +23,7 @@
 ### 📦 实用功能
 * **诱饵文件**: 支持PDF、图片、文档等格式，提高社工攻击成功率  
 * **数据压缩**: zlib压缩可减少20-30%的文件体积
-* **持久运行**: 程序稳定持续运行，不会自动退出或清理
+* **自毁机制**: 执行后自动清理痕迹
 * **纯Go实现**: 无CGO依赖，保证跨平台编译兼容性
 
 ## 使用方法 (Usage)
@@ -227,12 +227,7 @@ GoPhantom/
 
 ## 更新日志 (Changelog)
 
-### v1.3.1 (当前版本)
-- ✅ 移除自删除功能，提升程序稳定性
-- ✅ 优化程序持久运行机制
-- ✅ 修复进程自动退出问题
-
-### v1.3
+### v1.3 (当前版本)
 - ✅ 增强shellcode变异算法
 - ✅ 优化睡眠混淆机制
 - ✅ 改进反沙箱检测精度
@@ -262,3 +257,7 @@ GoPhantom/
 如果这个项目对您有帮助，请考虑给个⭐Star支持一下！
 
 有问题或建议？欢迎提交Issue或Pull Request。
+
+## Star History
+
+[![Star History Chart](https://api.star-history.com/svg?repos=watanabe-hsad/GoPhantom&type=date&legend=top-left)](https://www.star-history.com/#watanabe-hsad/GoPhantom&type=date&legend=top-left)

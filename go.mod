@@ -1,4 +1,4 @@
-module gofilepacker
+module GoPhantom
 
 go 1.24.3
 
